@@ -1,0 +1,290 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Spanish Spaced Repetition Trainer</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<style>
+  #draw-canvas {
+    border: 2px solid #ccc;
+    background-color: white;
+    touch-action: none;
+  }
+  .blacked {
+    color: transparent;
+    text-shadow: 0 0 25px black;
+    cursor: pointer;
+    filter: blur(2px);
+  }
+</style>
+</head>
+<body class="bg-gray-100 flex flex-col items-center justify-center min-h-screen text-gray-800">
+
+<div class="w-full max-w-lg bg-white shadow-lg rounded-lg p-6 text-center">
+  <h1 class="text-2xl font-bold mb-4 text-blue-600">🇪🇸 Spanish Practice Trainer</h1>
+
+  <div class="flex justify-center gap-2 mb-4">
+    <label>Start:</label>
+    <input id="start-input" type="number" value="50" class="border px-2 py-1 rounded w-20">
+    <label>End:</label>
+    <input id="end-input" type="number" value="500" class="border px-2 py-1 rounded w-20">
+    <button id="restart-btn" class="bg-blue-500 hover:bg-blue-600 text-white px-3 py-1 rounded">🔄 Restart</button>
+  </div>
+
+  <div id="word-container" class="text-4xl font-semibold mb-3 blacked select-none">Loading...</div>
+  <div id="translation" class="text-lg text-gray-600 mb-4 hidden"></div>
+
+  <div class="flex justify-center gap-3 mb-3">
+    <button id="show-btn" class="bg-gray-500 hover:bg-gray-600 text-white px-4 py-2 rounded">💬 Show Translation</button>
+    <button id="clear-btn" class="bg-yellow-500 hover:bg-yellow-600 text-white px-4 py-2 rounded">🧹 Clear Canvas</button>
+    <button id="mute-btn" class="bg-purple-500 hover:bg-purple-600 text-white px-4 py-2 rounded">🔈 Mute</button>
+  </div>
+
+  <canvas id="draw-canvas" width="400" height="200" class="mx-auto mb-4 rounded-md"></canvas>
+
+  <div class="flex justify-center gap-3">
+    <button id="know-btn" class="bg-green-500 hover:bg-green-600 text-white px-5 py-2 rounded">✅ Know</button>
+    <button id="dontknow-btn" class="bg-red-500 hover:bg-red-600 text-white px-5 py-2 rounded">❌ Don't Know</button>
+  </div>
+
+  <div class="mt-5 text-sm text-gray-500">
+    <span id="stats"></span>
+  </div>
+</div>
+
+<script>
+// ====== Globals ======
+let words = [];
+let wordStats = {};
+let schedule = [];
+let scheduleSize = 100;
+let currentIndex = 0;
+let isMuted = false;
+
+// ====== Canvas ======
+const canvas = document.getElementById("draw-canvas");
+const ctx = canvas.getContext("2d");
+let drawing = false;
+
+canvas.addEventListener("mousedown", startDraw);
+canvas.addEventListener("mouseup", endDraw);
+canvas.addEventListener("mouseout", endDraw);
+canvas.addEventListener("mousemove", draw);
+canvas.addEventListener("touchstart", startDraw);
+canvas.addEventListener("touchend", endDraw);
+canvas.addEventListener("touchcancel", endDraw);
+canvas.addEventListener("touchmove", drawTouch);
+
+function startDraw(e) {
+  drawing = true;
+  ctx.beginPath();
+  ctx.moveTo(getX(e), getY(e));
+}
+function endDraw() {
+  drawing = false;
+  ctx.closePath();
+}
+function draw(e) {
+  if (!drawing) return;
+  ctx.lineWidth = 3;
+  ctx.lineCap = "round";
+  ctx.strokeStyle = "black";
+  ctx.lineTo(getX(e), getY(e));
+  ctx.stroke();
+}
+function drawTouch(e) {
+  e.preventDefault();
+  if (!drawing) return;
+  const touch = e.touches[0];
+  ctx.lineWidth = 3;
+  ctx.lineCap = "round";
+  ctx.strokeStyle = "black";
+  ctx.lineTo(touch.clientX - canvas.getBoundingClientRect().left, touch.clientY - canvas.getBoundingClientRect().top);
+  ctx.stroke();
+}
+function getX(e) {
+  return e.clientX - canvas.getBoundingClientRect().left;
+}
+function getY(e) {
+  return e.clientY - canvas.getBoundingClientRect().top;
+}
+function clearCanvas() {
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+}
+
+// ====== Load Words ======
+async function loadWords(startIndex, endIndex) {
+  const wordEl = document.getElementById("word-container");
+  try {
+    const res = await fetch("fixed_spanish.txt");
+    const text = await res.text();
+    words = text.split("\n").map(w => w.trim()).filter(Boolean).slice(startIndex, endIndex);
+    if (words.length === 0) {
+      wordEl.textContent = "No words found!";
+      return false;
+    }
+    return true;
+  } catch (err) {
+    console.error(err);
+    wordEl.textContent = "Error loading words.";
+    return false;
+  }
+}
+
+// ====== Practice Setup ======
+function startPractice() {
+  scheduleSize = Math.max(scheduleSize, words.length);
+  schedule = Array.from({ length: scheduleSize }, () => []);
+  wordStats = Object.fromEntries(words.map(w => [w, { reps: 0, distance: 2 }]));
+  words.forEach((w, i) => schedule[i % scheduleSize].push(w));
+  currentIndex = 0;
+  showNextSlot();
+}
+
+// ====== Loop ======
+async function showNextSlot() {
+  if (currentIndex >= scheduleSize) currentIndex = 0;
+  const currentSlot = schedule[currentIndex];
+  schedule[currentIndex] = [];
+
+  if (currentSlot.length === 0) {
+    currentIndex++;
+    setTimeout(showNextSlot, 200);
+    return;
+  }
+
+  for (const word of currentSlot) {
+    await showWord(word);
+  }
+
+  currentIndex++;
+  setTimeout(showNextSlot, 200);
+}
+
+// ====== Display ======
+async function showWord(word) {
+  const wordEl = document.getElementById("word-container");
+  const translationEl = document.getElementById("translation");
+  const statsEl = document.getElementById("stats");
+
+  clearCanvas();
+  wordEl.textContent = word;
+  wordEl.classList.add("blacked");
+  translationEl.classList.add("hidden");
+  translationEl.textContent = "";
+
+  if (!isMuted) speakWord(word);
+
+  const translation = await fetchTranslation(word);
+  translationEl.textContent = translation || "(no translation)";
+
+  return new Promise(resolve => {
+    const knowBtn = document.getElementById("know-btn");
+    const dontBtn = document.getElementById("dontknow-btn");
+    const showBtn = document.getElementById("show-btn");
+    const clearBtn = document.getElementById("clear-btn");
+
+    function cleanup() {
+      knowBtn.removeEventListener("click", onKnow);
+      dontBtn.removeEventListener("click", onDontKnow);
+      showBtn.removeEventListener("click", onShow);
+      clearBtn.removeEventListener("click", onClear);
+      wordEl.removeEventListener("click", onReveal);
+    }
+
+    function onClear() {
+      clearCanvas();
+    }
+    function onReveal() {
+      wordEl.classList.remove("blacked");
+    }
+    function onShow() {
+      translationEl.classList.toggle("hidden");
+    }
+
+    function onKnow() {
+      cleanup();
+      const nextDist = updateDistance(word, true);
+      const targetIdx = (currentIndex + nextDist) % scheduleSize;
+      schedule[targetIdx].push(word);
+      statsEl.textContent = `✅ Remembered (${wordStats[word].reps} reps, next in ${nextDist})`;
+      resolve();
+    }
+
+    function onDontKnow() {
+      cleanup();
+      const nextDist = updateDistance(word, false);
+      const targetIdx = (currentIndex + nextDist) % scheduleSize;
+      schedule[targetIdx].push(word);
+      statsEl.textContent = `❌ Forgot (${wordStats[word].reps} reps, retry in ${nextDist})`;
+      resolve();
+    }
+
+    knowBtn.addEventListener("click", onKnow);
+    dontBtn.addEventListener("click", onDontKnow);
+    showBtn.addEventListener("click", onShow);
+    clearBtn.addEventListener("click", onClear);
+    wordEl.addEventListener("click", onReveal);
+  });
+}
+
+// ====== Distance Logic ======
+function updateDistance(word, remembered) {
+  const stats = wordStats[word];
+  if (remembered) {
+    stats.reps++;
+    stats.distance = Math.max(2, stats.distance + 2);
+  } else {
+    stats.reps = Math.max(0, stats.reps - 1);
+    stats.distance = Math.max(2, stats.distance);
+  }
+  return stats.distance;
+}
+
+// ====== Translation ======
+async function fetchTranslation(word) {
+  try {
+    const res = await fetch(`https://api.mymemory.translated.net/get?q=${encodeURIComponent(word)}&langpair=es|en`);
+    const data = await res.json();
+    return data?.responseData?.translatedText || "";
+  } catch (err) {
+    console.error("Translation error:", err);
+    return "";
+  }
+}
+
+// ====== Speech ======
+function speakWord(word) {
+  const utter = new SpeechSynthesisUtterance(word);
+  utter.lang = "es-ES";
+  speechSynthesis.speak(utter);
+}
+
+// ====== Mute Toggle ======
+document.getElementById("mute-btn").addEventListener("click", () => {
+  isMuted = !isMuted;
+  const btn = document.getElementById("mute-btn");
+  btn.textContent = isMuted ? "🔇 Unmute" : "🔈 Mute";
+});
+
+// ====== Restart ======
+document.getElementById("restart-btn").addEventListener("click", async () => {
+  const startVal = parseInt(document.getElementById("start-input").value) || 50;
+  const endVal = parseInt(document.getElementById("end-input").value) || 500;
+  speechSynthesis.cancel();
+  words = [];
+  schedule = [];
+  currentIndex = 0;
+  const success = await loadWords(startVal, endVal);
+  if (success) startPractice();
+});
+
+// ====== Initial load ======
+loadWords(50, 500).then(success => {
+  if (success) startPractice();
+});
+</script>
+
+</body>
+</html>
